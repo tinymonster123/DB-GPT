@@ -1,9 +1,10 @@
 """GaussDB connector."""
 import logging
-from typing import Any, Iterable, List, Optional, Tuple, cast
+from typing import Any, Iterable, Optional, cast
 from urllib.parse import quote, quote_plus as urlquote
 
-from sqlalchemy import text
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
 from .base import RDBMSConnector
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 class GaussDBConnector(RDBMSConnector):
     """GaussDB connector."""
 
-    driver = "opengauss+psycopg2"
+    driver = "postgresql+psycopg2"
     db_type = "gaussdb"
     db_dialect = "opengauss"
 
@@ -25,14 +26,34 @@ class GaussDBConnector(RDBMSConnector):
         user: str,
         pwd: str,
         db_name: str,
-        engine_args: Optional[dict] = None,
+        sslmode: Optional[str] = None,
         **kwargs: Any,
     ) -> "GaussDBConnector":
         """Create a new GaussDBConnector from host, port, user, pwd, db_name."""
-        db_url: str = (
-            f"{cls.driver}://{quote(user)}:{urlquote(pwd)}@{host}:{str(port)}/{db_name}"
-        )
-        return cast(GaussDBConnector, cls.from_uri(db_url, engine_args, **kwargs))
+        params = []
+        if sslmode:
+            params.append(f"sslmode={sslmode}")
+        param_str = "&".join(params)
+        if param_str:
+            db_url = f"{cls.driver}://{quote(user)}:{urlquote(pwd)}@{host}:{port}/{db_name}?{param_str}"
+        else:
+            db_url = f"{cls.driver}://{quote(user)}:{urlquote(pwd)}@{host}:{port}/{db_name}"
+        return cast(GaussDBConnector, cls.from_uri(db_url, **kwargs))
+
+    @classmethod
+    def from_uri(cls, database_uri: str, engine_args: Optional[dict] = None) -> "GaussDBConnector":
+        """Create a connector from a database URI."""
+        _engine_args = engine_args or {}
+        engine = create_engine(database_uri, connect_args=_engine_args)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+        return cls(engine, session)
+
+    def __init__(self, engine, session):
+        """Initialize the connector with an engine and a session."""
+        self._engine = engine
+        self.session = session
+        self._inspector = inspect(engine)
 
     def _sync_tables_from_db(self) -> Iterable[str]:
         """Synchronize tables from GaussDB."""
@@ -55,7 +76,6 @@ class GaussDBConnector(RDBMSConnector):
         return self._all_tables
 
 
-    
 """GaussDB Router."""
 class GaussDBRouter:
     """A router for handling query routing in distributed GaussDB."""
@@ -72,5 +92,4 @@ class GaussDBRouter:
 
     def _select_node(self, query: str):
         """Select the appropriate node for the query."""
-
         return self.nodes[0]  # Placeholder
